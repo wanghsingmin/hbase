@@ -21,3 +21,5 @@ jobs:
           sudo apt-get -y install maven
           mkdir staging
           mvn clean package -DskipTests -Dhadoop.profile=3.0 -Dhadoop-three.version=3.3.1
+      - name: check contents
+        run: ls -R
