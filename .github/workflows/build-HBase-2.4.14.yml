@@ -1,9 +1,9 @@
-name: HBase
+name: HBase-build-workflow
 on: 
   push:
     branches: [ march-Action/2.4.14 ]
 jobs:
-  build:
+  build-hbase:
     runs-on: ubuntu-20.04
     #https://github.com/actions/runner-images
     steps:
@@ -20,6 +20,6 @@ jobs:
           sudo apt-get -y install openjdk-8-jdk
           sudo apt-get -y install maven
           mkdir staging
-          mvn clean package -DskipTests -Dhadoop.profile=3.0 -Dhadoop-three.version=3.3.1
+          mvn clean package assembly:single -DskipTests -Dhadoop.profile=3.0 -Dhadoop-three.version=3.3.1
       - name: check contents
-        run: ls -R
+        run: ls -alR /home/runner/work/hbase/hbase/hbase-assembly/target/
