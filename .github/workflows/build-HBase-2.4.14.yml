@@ -19,7 +19,14 @@ jobs:
           sudo uname -m
           sudo apt-get -y install openjdk-8-jdk
           sudo apt-get -y install maven
-          mkdir staging
+          mkdir ./myRelease
           mvn clean package assembly:single -DskipTests -Dhadoop.profile=3.0 -Dhadoop-three.version=3.3.1
       - name: check contents
-        run: ls -alR /home/runner/work/hbase/hbase/hbase-assembly/target/
+        run: ls -al /home/runner/work/hbase/hbase/hbase-assembly/target/*.tar.gz
+      - name: move assembly to release
+        run: cp /home/runner/work/hbase/hbase/hbase-assembly/target/*.tar.gz ./myRelease/
+      - name: upload-artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: Package_checknative1
+          path: myRelease
