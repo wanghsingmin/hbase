@@ -28,5 +28,5 @@ jobs:
       - name: upload-artifact
         uses: actions/upload-artifact@v3
         with:
-          name: Package_checknative1
-          path: myRelease
+          name: Package_HBase-2.4.14-ServerClient
+          path: ./myRelease/
