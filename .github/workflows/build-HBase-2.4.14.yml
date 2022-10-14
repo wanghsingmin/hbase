@@ -1,0 +1,23 @@
+name: HBase
+on: 
+  push:
+    branches: [ trunk ]
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    #https://github.com/actions/runner-images
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          ref: rel/2.4.14
+      - name: build hbase-2.4.14
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-8-openjdk-amd64
+        run: |
+          sudo lsb_release -a
+          sudo uname -m
+          sudo apt-get -y install openjdk-8-jdk
+          sudo apt-get -y install maven
+          mkdir staging
+          mvn clean package -DskipTests -Dhadoop.profile=3.0 -Dhadoop-three.version=3.3.1
