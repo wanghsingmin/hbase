@@ -14,9 +14,9 @@ jobs:
       - name: check kernel version info  
         run: lsb_release -a && uname -a
       - name: install openjdk-8-jdk
-        #run: sudo apt-get -y install openjdk-8-jdk
-        run: echo $JAVA_HOME_8_X64 ' ==> JAVA_HOME= ' $JAVA_HOME
-      - name: install maven
+        run: sudo apt-get -y install openjdk-8-jdk
+        #run: echo $JAVA_HOME_8_X64 ' ==> JAVA_HOME= ' $JAVA_HOME
+      - name: Show Maven version
         #run: sudo apt-get -y install maven
         run: mvn -version
       - name: build hbase-2.4.14 with Hadoop 3.3.1 and build the Tarballs
