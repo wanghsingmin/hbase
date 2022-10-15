@@ -11,15 +11,13 @@ jobs:
         uses: actions/checkout@v3
         with:
           ref: rel/2.4.14
-      - name: check lsb_release and uname
-        run: |
-          sudo lsb_release -a
-          sudo uname -m
+      - name: check kernel version info  
+        run: sudo lsb_release -a
       - name: install openjdk-8-jdk
         run: sudo apt-get -y install openjdk-8-jdk
       - name: install maven
-        run: sudo apt-get -y install maven and build the Tarballs
-      - name: build hbase-2.4.14 with Hadoop 3.3.1
+        run: sudo apt-get -y install maven
+      - name: build hbase-2.4.14 with Hadoop 3.3.1 and build the Tarballs
         env:
           JAVA_HOME: /usr/lib/jvm/java-8-openjdk-amd64
         run: mvn clean package assembly:single -DskipTests -Dhadoop.profile=3.0 -Dhadoop-three.version=3.3.1
