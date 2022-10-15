@@ -12,16 +12,18 @@ jobs:
         with:
           ref: rel/2.4.14
       - name: check kernel version info  
-        run: sudo lsb_release -a
+        run: lsb_release -a && uname -a
       - name: install openjdk-8-jdk
-        run: sudo apt-get -y install openjdk-8-jdk
+        #run: sudo apt-get -y install openjdk-8-jdk
+        run: echo $JAVA_HOME_8_X64 ' ==> JAVA_HOME= ' $JAVA_HOME
       - name: install maven
-        run: sudo apt-get -y install maven
+        #run: sudo apt-get -y install maven
+        run: mvn -version
       - name: build hbase-2.4.14 with Hadoop 3.3.1 and build the Tarballs
         env:
           JAVA_HOME: /usr/lib/jvm/java-8-openjdk-amd64
         run: mvn clean package assembly:single -DskipTests -Dhadoop.profile=3.0 -Dhadoop-three.version=3.3.1
-      - name: prepare save assembly files path
+      - name: make folder for save assembly files
         run: mkdir ./myRelease
       - name: move Tarballs to release folder
         run: cp /home/runner/work/hbase/hbase/hbase-assembly/target/*.tar.gz ./myRelease/
