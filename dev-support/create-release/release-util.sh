@@ -30,12 +30,16 @@
 DRY_RUN=${DRY_RUN:-1} #default to dry run
 DEBUG=${DEBUG:-0}
 GPG=${GPG:-gpg}
-GPG_ARGS=(--no-autostart --batch)
+GPG_ARGS=(--no-autostart --batch --pinentry-mode error)
 if [ -n "${GPG_KEY}" ]; then
   GPG_ARGS=("${GPG_ARGS[@]}" --local-user "${GPG_KEY}")
 fi
 # Maven Profiles for publishing snapshots and release to Maven Central and Dist
 PUBLISH_PROFILES=("-P" "apache-release,release")
+
+# get the current directory, we want to use some python scripts to generate
+# CHANGES.md and RELEASENOTES.md
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 function error {
   log "Error: $*" >&2
@@ -56,8 +60,11 @@ function read_config {
 }
 
 function parse_version {
-  grep -e '<version>.*</version>' | \
-    head -n 2 | tail -n 1 | cut -d'>' -f2 | cut -d '<' -f1
+  xmllint --xpath "//*[local-name()='project']/*[local-name()='version']/text()" -
+}
+
+function parse_revision {
+  xmllint --xpath "//*[local-name()='project']/*[local-name()='properties']/*[local-name()='revision']/text()" -
 }
 
 function banner {
@@ -131,6 +138,8 @@ function get_api_diff_version {
 # Get all branches that begin with 'branch-', the hbase convention for
 # release branches, sort them and then pop off the most recent.
 function get_release_info {
+  init_xmllint
+
   PROJECT="$(read_config "PROJECT" "$PROJECT")"
   export PROJECT
 
@@ -160,6 +169,14 @@ function get_release_info {
   local version
   version="$(curl -s "$ASF_REPO_WEBUI;a=blob_plain;f=pom.xml;hb=refs/heads/$GIT_BRANCH" |
     parse_version)"
+  # We do not want to expand ${revision} here, see https://maven.apache.org/maven-ci-friendly.html
+  # If we use ${revision} as placeholder, we need to parse the revision property to
+  # get maven version
+  # shellcheck disable=SC2016
+  if [[ "${version}" == '${revision}' ]]; then
+    version="$(curl -s "$ASF_REPO_WEBUI;a=blob_plain;f=pom.xml;hb=refs/heads/$GIT_BRANCH" |
+      parse_revision)"
+  fi
   log "Current branch VERSION is $version."
 
   NEXT_VERSION="$version"
@@ -183,7 +200,8 @@ function get_release_info {
     local RC_COUNT
     if [ "$REV" != 0 ]; then
       local PREV_REL_REV=$((REV - 1))
-      PREV_REL_TAG="rel/${SHORT_VERSION}.${PREV_REL_REV}"
+      PREV_VERSION=${SHORT_VERSION}.${PREV_REL_REV}
+      PREV_REL_TAG="rel/${PREV_VERSION}"
       if git ls-remote --tags "$ASF_REPO" "$PREV_REL_TAG" | grep -q "refs/tags/${PREV_REL_TAG}$" ; then
         RC_COUNT=0
         REV=$((REV + 1))
@@ -197,13 +215,16 @@ function get_release_info {
     else
       REV=$((REV + 1))
       NEXT_VERSION="${SHORT_VERSION}.${REV}-SNAPSHOT"
+      # not easy to calculate it, just leave it as empty and let users provide it
+      PREV_VERSION=""
       RC_COUNT=0
     fi
   fi
 
   RELEASE_VERSION="$(read_config "RELEASE_VERSION" "$RELEASE_VERSION")"
   NEXT_VERSION="$(read_config "NEXT_VERSION" "$NEXT_VERSION")"
-  export RELEASE_VERSION NEXT_VERSION
+  PREV_VERSION="$(read_config "PREV_VERSION" "$PREV_VERSION")"
+  export RELEASE_VERSION NEXT_VERSION PREV_VERSION
 
   RC_COUNT="$(read_config "RC_COUNT" "$RC_COUNT")"
   if [[ -z "${RELEASE_TAG}" ]]; then
@@ -259,6 +280,7 @@ Release details:
 GIT_BRANCH:      $GIT_BRANCH
 RELEASE_VERSION: $RELEASE_VERSION
 NEXT_VERSION:    $NEXT_VERSION
+PREV_VERSION:    $PREV_VERSION
 RELEASE_TAG:     $RELEASE_TAG $([[ "$GIT_REF" != "$RELEASE_TAG" ]] && printf "\n%s\n" "GIT_REF:         $GIT_REF")
 API_DIFF_TAG:    $API_DIFF_TAG
 ASF_USERNAME:    $ASF_USERNAME
@@ -335,6 +357,17 @@ function init_locale {
   export LANG="$locale_value"
 }
 
+# Check whether xmllint is available
+function init_xmllint {
+  if ! [ -x "$(command -v xmllint)"  ]; then
+    log "Error: xmllint is not available, we need to use it for parsing pom.xml." >&2
+    log "Ubuntu: apt install libxml2-utils" >&2
+    log "CentOS: yum install xmlstarlet" >&2
+    log "Mac OS: brew install xmlstarlet" >&2
+    exit 1
+  fi
+}
+
 # Initializes JAVA_VERSION to the version of the JVM in use.
 function init_java {
   if [ -z "$JAVA_HOME" ]; then
@@ -346,10 +379,10 @@ function init_java {
 }
 
 function init_python {
-  if ! [ -x "$(command -v python2)"  ]; then
-    error 'python2 needed by yetus. Install or add link? E.g: sudo ln -sf /usr/bin/python2.7 /usr/local/bin/python2'
+  if ! [ -x "$(command -v python3)"  ]; then
+    error 'python3 needed by yetus and api report. Install or add link?'
   fi
-  log "python version: $(python2 --version)"
+  log "python3 version: $(python3 --version)"
 }
 
 # Set MVN
@@ -431,8 +464,8 @@ function git_clone_overwrite {
     log "Clone will be of the gitbox repo for ${PROJECT}."
     if [ -n "${ASF_USERNAME}" ] && [ -n "${ASF_PASSWORD}" ]; then
       # Ugly!
-      encoded_username=$(python -c "import urllib; print urllib.quote('''$ASF_USERNAME''', '')")
-      encoded_password=$(python -c "import urllib; print urllib.quote('''$ASF_PASSWORD''', '')")
+      encoded_username=$(python3 -c "from urllib.parse import quote; print(quote('''$ASF_USERNAME''', ''))")
+      encoded_password=$(python3 -c "from urllib.parse import quote; print(quote('''$ASF_PASSWORD''', ''))")
       GIT_REPO="https://$encoded_username:$encoded_password@${asf_repo}"
     else
       GIT_REPO="https://${asf_repo}"
@@ -524,10 +557,11 @@ function get_jira_name {
 # Update the CHANGES.md
 # DOES NOT DO COMMITS! Caller should do that.
 # requires yetus to have a defined home already.
-# yetus requires python2 to be on the path.
+# yetus requires python3 to be on the path.
 function update_releasenotes {
   local project_dir="$1"
   local jira_fix_version="$2"
+  local previous_jira_fix_version="$3"
   local jira_project
   local timing_token
   timing_token="$(start_step)"
@@ -547,11 +581,17 @@ function update_releasenotes {
     sed -i -e \
         "/^## Release ${jira_fix_version}/,/^## Release/ {//!d; /^## Release ${jira_fix_version}/d;}" \
         "${project_dir}/CHANGES.md" || true
+  else
+    # should be hbase 3.x, will copy CHANGES.md from archive.a.o/dist
+    curl --location --fail --silent --show-error --output ${project_dir}/CHANGES.md "https://archive.apache.org/dist/hbase/${previous_jira_fix_version}/CHANGES.md"
   fi
   if [ -f "${project_dir}/RELEASENOTES.md" ]; then
     sed -i -e \
         "/^# ${jira_project}  ${jira_fix_version} Release Notes/,/^# ${jira_project}/{//!d; /^# ${jira_project}  ${jira_fix_version} Release Notes/d;}" \
         "${project_dir}/RELEASENOTES.md" || true
+  else
+    # should be hbase 3.x, will copy CHANGES.md from archive.a.o/dist
+    curl --location --fail --silent --show-error --output ${project_dir}/RELEASENOTES.md "https://archive.apache.org/dist/hbase/${previous_jira_fix_version}/RELEASENOTES.md"
   fi
 
   # Yetus will not generate CHANGES if no JIRAs fixed against the release version
@@ -566,21 +606,12 @@ function update_releasenotes {
 
   # The releasedocmaker call above generates RELEASENOTES.X.X.X.md and CHANGELOG.X.X.X.md.
   if [ -f "${project_dir}/CHANGES.md" ]; then
-    # To insert into project's CHANGES.md...need to cut the top off the
-    # CHANGELOG.X.X.X.md file removing license and first line and then
-    # insert it after the license comment closing where we have a
-    # DO NOT REMOVE marker text!
-    sed -i -e '/## Release/,$!d' "${changelog}"
-    sed -i -e '2,${/^# HBASE Changelog/d;}' "${project_dir}/CHANGES.md"
-    sed -i -e "/DO NOT REMOVE/r ${changelog}" "${project_dir}/CHANGES.md"
+    $SELF/prepend_changes.py "${changelog}" "${project_dir}/CHANGES.md"
   else
     mv "${changelog}" "${project_dir}/CHANGES.md"
   fi
   if [ -f "${project_dir}/RELEASENOTES.md" ]; then
-    # Similar for RELEASENOTES but slightly different.
-    sed -i -e '/Release Notes/,$!d' "${releasenotes}"
-    sed -i -e '2,${/^# RELEASENOTES/d;}' "${project_dir}/RELEASENOTES.md"
-    sed -i -e "/DO NOT REMOVE/r ${releasenotes}" "${project_dir}/RELEASENOTES.md"
+    $SELF/prepend_releasenotes.py "${releasenotes}" "${project_dir}/RELEASENOTES.md"
   else
     mv "${releasenotes}" "${project_dir}/RELEASENOTES.md"
   fi
@@ -639,10 +670,16 @@ make_binary_release() {
   # a third to assemble the binary artifact. Trying to do
   # all in the one invocation fails; a problem in our
   # assembly spec to in maven. TODO. Meantime, three invocations.
-  "${MVN[@]}" clean install -DskipTests
-  "${MVN[@]}" site -DskipTests
+  cmd=("${MVN[@]}" clean install -DskipTests)
+  echo "${cmd[*]}"
+  "${cmd[@]}"
+  cmd=("${MVN[@]}" site -DskipTests)
+  echo "${cmd[*]}"
+  "${cmd[@]}"
   kick_gpg_agent
-  "${MVN[@]}" install assembly:single -DskipTests -Dcheckstyle.skip=true "${PUBLISH_PROFILES[@]}"
+  cmd=("${MVN[@]}" install assembly:single -DskipTests -Dcheckstyle.skip=true "${PUBLISH_PROFILES[@]}")
+  echo "${cmd[*]}"
+  "${cmd[@]}"
 
   # Check there is a bin gz output. The build may not produce one: e.g. hbase-thirdparty.
   local f_bin_prefix="./${PROJECT}-assembly/target/${base_name}"
@@ -678,8 +715,23 @@ function kick_gpg_agent {
 # Do maven command to set version into local pom
 function maven_set_version { #input: <version_to_set>
   local this_version="$1"
-  log "${MVN[@]}" versions:set -DnewVersion="$this_version"
-  "${MVN[@]}" versions:set -DnewVersion="$this_version" | grep -v "no value" # silence logs
+  local use_revision='false'
+  local maven_version
+  maven_version="$(parse_version < pom.xml)"
+  # We do not want to expand ${revision} here, see https://maven.apache.org/maven-ci-friendly.html
+  # If we use ${revision} as placeholder, the way to bump maven version will be different
+  # shellcheck disable=SC2016
+  if [[ "${maven_version}" == '${revision}' ]]; then
+    use_revision='true'
+  fi
+
+  if [ "${use_revision}" = 'false' ] ; then
+    log "${MVN[@]}" versions:set -DnewVersion="$this_version"
+    "${MVN[@]}" versions:set -DnewVersion="$this_version" | grep -v "no value" # silence logs
+  else
+    log "${MVN[@]}" versions:set-property -Dproperty=revision -DnewVersion="$this_version" -DgenerateBackupPoms=false
+    "${MVN[@]}" versions:set-property -Dproperty=revision -DnewVersion="$this_version" -DgenerateBackupPoms=false | grep -v "no value" # silence logs
+  fi
 }
 
 # Do maven command to read version from local pom
@@ -739,4 +791,10 @@ function maven_deploy { #inputs: <snapshot|release> <log_file_path>
 # * LINUX
 function get_host_os() {
   uname -s | tr '[:lower:]' '[:upper:]'
+}
+
+function is_tracked() {
+  local file=$1
+  git ls-files --error-unmatch "$file" &>/dev/null
+  return $?
 }
